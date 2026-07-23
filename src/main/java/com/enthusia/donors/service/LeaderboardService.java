@@ -8,6 +8,7 @@ import com.enthusia.donors.export.R2UploadService;
 import com.enthusia.donors.model.DonorEntry;
 import com.enthusia.donors.model.PaymentRecord;
 import com.enthusia.donors.model.RefreshState;
+import com.enthusia.donors.mojang.MojangClient;
 import com.enthusia.donors.storage.DonorRepository;
 import com.enthusia.donors.tebex.FakeDonorData;
 import com.enthusia.donors.tebex.TebexClient;
@@ -74,7 +75,19 @@ public final class LeaderboardService {
                 cache.markFailure("Local cache load failed");
                 logger.warning("Could not load local donor cache: " + ex.getMessage());
             }
-        }, ioExecutor).thenRun(() -> refresh(false));
+        }, ioExecutor).thenRun(() -> {
+            // Run UUID migration before first refresh
+            MojangClient mojangClient = new MojangClient(logger);
+            try {
+                int migrated = repository.migrateUuids(mojangClient);
+                if (migrated > 0) {
+                    logger.info("UUID migration: fixed " + migrated + " payment(s) with wrong UUIDs.");
+                }
+            } catch (Exception ex) {
+                logger.warning("UUID migration failed: " + ex.getMessage());
+            }
+            refresh(false);
+        });
         schedule();
     }
 

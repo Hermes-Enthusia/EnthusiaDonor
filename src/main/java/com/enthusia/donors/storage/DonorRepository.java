@@ -3,6 +3,7 @@ package com.enthusia.donors.storage;
 import com.enthusia.donors.config.DonorsConfig;
 import com.enthusia.donors.model.DonorEntry;
 import com.enthusia.donors.model.PaymentRecord;
+import com.enthusia.donors.mojang.MojangClient;
 
 import java.math.BigDecimal;
 import java.nio.file.Files;
@@ -22,6 +23,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 
@@ -292,6 +294,143 @@ public final class DonorRepository {
             s.executeUpdate("ALTER TABLE " + table + " ADD COLUMN " + column + " " + definition);
         }
     }
+
+    /**
+     * Migrate existing payments with wrong UUIDs by resolving the real Mojang
+     * UUID from player_name + created_at timestamp. Only fixes rows where the
+     * Mojang-resolved UUID differs from the stored UUID.
+     *
+     * @return number of payment rows migrated
+     */
+    public int migrateUuids(MojangClient mojangClient) throws SQLException {
+        // Step 1: collect distinct (uuid, name, created_at) rows
+        List<Row> rows = new ArrayList<>();
+        try (Connection c = connect();
+             Statement s = c.createStatement();
+             ResultSet rs = s.executeQuery(
+                     "SELECT DISTINCT player_uuid, player_name, created_at FROM payments")) {
+            while (rs.next()) {
+                rows.add(new Row(
+                        rs.getString("player_uuid"),
+                        rs.getString("player_name"),
+                        rs.getLong("created_at")
+                ));
+            }
+        }
+
+        int updated = 0;
+        int skipped = 0;
+        try (Connection c = connect()) {
+            c.setAutoCommit(false);
+
+            try (PreparedStatement updatePayment = c.prepareStatement(
+                    "UPDATE payments SET player_uuid = ? WHERE player_uuid = ?");
+                 PreparedStatement updateTotals = c.prepareStatement(
+                    "UPDATE donor_totals SET player_uuid = ? WHERE player_uuid = ?")) {
+
+                for (Row row : rows) {
+                    // Parse stored UUID — skip if unparseable
+                    UUID storedUuid;
+                    try {
+                        storedUuid = UUID.fromString(row.uuid);
+                    } catch (IllegalArgumentException e) {
+                        skipped++;
+                        continue;
+                    }
+
+                    // Resolve real UUID from Mojang
+                    java.time.Instant createdAt = java.time.Instant.ofEpochMilli(row.createdAt);
+                    Optional<UUID> resolved;
+                    try {
+                        resolved = mojangClient.resolveAtTime(row.name, createdAt);
+                        if (resolved.isEmpty()) {
+                            // Try current-time fallback
+                            resolved = mojangClient.resolveCurrent(row.name);
+                        }
+                    } catch (Exception e) {
+                        skipped++;
+                        continue;
+                    }
+
+                    if (resolved.isEmpty()) {
+                        skipped++;
+                        continue;
+                    }
+
+                    UUID realUuid = resolved.get();
+                    if (realUuid.equals(storedUuid)) {
+                        // Already correct — skip
+                        continue;
+                    }
+
+                    String realUuidStr = realUuid.toString();
+
+                    // Update payments table
+                    updatePayment.setString(1, realUuidStr);
+                    updatePayment.setString(2, row.uuid);
+                    updatePayment.addBatch();
+
+                    // Update donor_totals table
+                    updateTotals.setString(1, realUuidStr);
+                    updateTotals.setString(2, row.uuid);
+                    updateTotals.addBatch();
+
+                    updated++;
+                }
+
+                updatePayment.executeBatch();
+                updateTotals.executeBatch();
+            } catch (Exception e) {
+                c.rollback();
+                throw new SQLException("UUID migration failed", e);
+            }
+            c.commit();
+        }
+
+        // Re-merge donor_totals: if migration caused duplicate UUIDs, merge them
+        if (updated > 0) {
+            mergeDuplicateDonorTotals();
+        }
+
+        return updated;
+    }
+
+    private void mergeDuplicateDonorTotals() throws SQLException {
+        try (Connection c = connect()) {
+            c.setAutoCommit(false);
+            try (Statement s = c.createStatement()) {
+                // Group by UUID, sum totals, keep max ranks
+                s.executeUpdate("""
+                        CREATE TEMPORARY TABLE IF NOT EXISTS merged_totals AS
+                        SELECT
+                            player_uuid,
+                            MIN(player_name) AS player_name,
+                            SUM(CAST(alltime_total AS REAL)) AS alltime_total,
+                            SUM(CAST(monthly_total AS REAL)) AS monthly_total,
+                            MIN(alltime_rank) AS alltime_rank,
+                            MIN(monthly_rank) AS monthly_rank,
+                            MAX(updated_at) AS updated_at
+                        FROM donor_totals
+                        GROUP BY player_uuid
+                        HAVING COUNT(*) > 1
+                        """);
+                // Delete duplicates
+                s.executeUpdate("""
+                        DELETE FROM donor_totals
+                        WHERE player_uuid IN (SELECT player_uuid FROM merged_totals)
+                        """);
+                // Insert merged
+                s.executeUpdate("""
+                        INSERT INTO donor_totals
+                        SELECT * FROM merged_totals
+                        """);
+                s.executeUpdate("DROP TABLE IF EXISTS merged_totals");
+            }
+            c.commit();
+        }
+    }
+
+    private record Row(String uuid, String name, long createdAt) {}
 
     private boolean intersects(Set<Integer> a, Set<Integer> b) {
         for (Integer value : a) {
