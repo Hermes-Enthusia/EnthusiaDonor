@@ -120,4 +120,13 @@ public final class MojangClient {
                 + undashed.substring(20);
         return UUID.fromString(dashed);
     }
+
+    /**
+     * Floodgate assigns Bedrock players Java UUIDs with the prefix
+     * 00000000-0000-0000-0009-xxxxxxxxxxxx. These are valid and should
+     * not be overridden by Mojang resolution (which would return 204).
+     */
+    public static boolean isFloodgateUuid(UUID uuid) {
+        return uuid.toString().startsWith("00000000-0000-0000-0009-");
+    }
 }

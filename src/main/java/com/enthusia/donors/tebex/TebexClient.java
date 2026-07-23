@@ -177,30 +177,35 @@ public final class TebexClient {
                 ? object.getAsJsonObject("player")
                 : new JsonObject();
         String name = stringValue(player, "name").orElse("Unknown");
+
+        // Parse Tebex UUID — used as fallback or for Floodgate players
+        Optional<UUID> tebexUuid = stringValue(player, "uuid").flatMap(this::parseUuid);
         UUID uuid;
 
-        // Resolve real Mojang UUID first (point-in-time lookup using payment date)
-        Instant createdAt = parseInstant(stringValue(object, "date").orElse(null)).orElse(importedAt);
         if (useMojangResolution) {
-            Optional<UUID> mojangUuid = resolveMojangUuid(name, createdAt);
-            if (mojangUuid.isPresent()) {
-                uuid = mojangUuid.get();
+            // Floodgate UUIDs (00000000-0000-0000-0009-xxxxxxxxxxxx) are valid
+            // for Bedrock players; don't try to resolve them through Mojang
+            if (tebexUuid.isPresent() && MojangClient.isFloodgateUuid(tebexUuid.get())) {
+                uuid = tebexUuid.get();
             } else {
-                // Fall back to Tebex UUID
-                Optional<UUID> tebexUuid = stringValue(player, "uuid").flatMap(this::parseUuid);
-                if (tebexUuid.isEmpty()) {
+                Instant createdAt = parseInstant(stringValue(object, "date").orElse(null)).orElse(importedAt);
+                Optional<UUID> mojangUuid = resolveMojangUuid(name, createdAt);
+                if (mojangUuid.isPresent()) {
+                    uuid = mojangUuid.get();
+                } else if (tebexUuid.isPresent()) {
+                    uuid = tebexUuid.get();
+                } else {
                     return Optional.empty();
                 }
-                uuid = tebexUuid.get();
             }
         } else {
-            Optional<UUID> tebexUuid = stringValue(player, "uuid").flatMap(this::parseUuid);
             if (tebexUuid.isEmpty()) {
                 return Optional.empty();
             }
             uuid = tebexUuid.get();
         }
 
+        Instant createdAt = parseInstant(stringValue(object, "date").orElse(null)).orElse(importedAt);
         BigDecimal amount = new BigDecimal(stringValue(object, "amount").orElse("0")).max(BigDecimal.ZERO);
         String status = stringValue(object, "status").orElse("Unknown");
         boolean invalidStatus = switch (normalizeStatus(status)) {

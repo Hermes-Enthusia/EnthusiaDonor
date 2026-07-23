@@ -338,6 +338,11 @@ public final class DonorRepository {
                         continue;
                     }
 
+                    // Floodgate UUIDs are valid — skip
+                    if (MojangClient.isFloodgateUuid(storedUuid)) {
+                        continue;
+                    }
+
                     // Resolve real UUID from Mojang
                     java.time.Instant createdAt = java.time.Instant.ofEpochMilli(row.createdAt);
                     Optional<UUID> resolved;
