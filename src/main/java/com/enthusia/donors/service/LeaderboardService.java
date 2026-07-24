@@ -8,6 +8,7 @@ import com.enthusia.donors.export.R2UploadService;
 import com.enthusia.donors.model.DonorEntry;
 import com.enthusia.donors.model.PaymentRecord;
 import com.enthusia.donors.model.RefreshState;
+import com.enthusia.donors.mojang.MojangClient;
 import com.enthusia.donors.storage.DonorRepository;
 import com.enthusia.donors.tebex.FakeDonorData;
 import com.enthusia.donors.tebex.TebexClient;
@@ -74,7 +75,26 @@ public final class LeaderboardService {
                 cache.markFailure("Local cache load failed");
                 logger.warning("Could not load local donor cache: " + ex.getMessage());
             }
-        }, ioExecutor).thenRun(() -> refresh(false));
+        }, ioExecutor).thenCompose(ignored -> refresh(false))
+                .thenRun(() -> {
+                    // Run UUID migration AFTER Tebex refresh to correct any UUIDs the
+                    // TebexClient couldn't resolve. Then rebuild totals from the fixed data.
+                    MojangClient mojangClient = new MojangClient(logger);
+                    try {
+                        int migrated = repository.migrateUuids(mojangClient);
+                        if (migrated > 0) {
+                            logger.info("UUID migration: fixed " + migrated + " payment(s) with wrong UUIDs.");
+                            DonorsConfig config = configManager.get();
+                            List<DonorEntry> totals = repository.rebuildTotals(config, Set.of());
+                            cache.replace(totals, Instant.now(), RefreshState.OK);
+                            DonorCache.Snapshot snapshot = cache.snapshot();
+                            jsonExportService.export(snapshot, cache, config);
+                            logger.info("UUID migration: rebuilt donor totals after migration.");
+                        }
+                    } catch (Exception ex) {
+                        logger.warning("UUID migration failed: " + ex.getMessage());
+                    }
+                });
         schedule();
     }
 

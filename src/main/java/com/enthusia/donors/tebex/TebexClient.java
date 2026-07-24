@@ -2,6 +2,7 @@ package com.enthusia.donors.tebex;
 
 import com.enthusia.donors.config.DonorsConfig;
 import com.enthusia.donors.model.PaymentRecord;
+import com.enthusia.donors.mojang.MojangClient;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
@@ -33,9 +34,17 @@ public final class TebexClient {
     private static final URI PAYMENTS_URI = URI.create("https://plugin.tebex.io/payments");
 
     private final Logger logger;
+    private final MojangClient mojangClient;
+    private final boolean useMojangResolution;
 
     public TebexClient(Logger logger) {
+        this(logger, null);
+    }
+
+    public TebexClient(Logger logger, MojangClient mojangClient) {
         this.logger = logger;
+        this.mojangClient = mojangClient;
+        this.useMojangResolution = mojangClient != null;
     }
 
     public CompletableFuture<List<PaymentRecord>> fetchPayments(DonorsConfig config) {
@@ -167,12 +176,36 @@ public final class TebexClient {
         JsonObject player = object.has("player") && object.get("player").isJsonObject()
                 ? object.getAsJsonObject("player")
                 : new JsonObject();
-        Optional<UUID> uuid = stringValue(player, "uuid").flatMap(this::parseUuid);
         String name = stringValue(player, "name").orElse("Unknown");
-        if (uuid.isEmpty()) {
-            return Optional.empty();
+
+        // Parse Tebex UUID — used as fallback or for Floodgate players
+        Optional<UUID> tebexUuid = stringValue(player, "uuid").flatMap(this::parseUuid);
+        UUID uuid;
+
+        if (useMojangResolution) {
+            // Floodgate UUIDs (00000000-0000-0000-0009-xxxxxxxxxxxx) are valid
+            // for Bedrock players; don't try to resolve them through Mojang
+            if (tebexUuid.isPresent() && MojangClient.isFloodgateUuid(tebexUuid.get())) {
+                uuid = tebexUuid.get();
+            } else {
+                Instant createdAt = parseInstant(stringValue(object, "date").orElse(null)).orElse(importedAt);
+                Optional<UUID> mojangUuid = resolveMojangUuid(name, createdAt);
+                if (mojangUuid.isPresent()) {
+                    uuid = mojangUuid.get();
+                } else if (tebexUuid.isPresent()) {
+                    uuid = tebexUuid.get();
+                } else {
+                    return Optional.empty();
+                }
+            }
+        } else {
+            if (tebexUuid.isEmpty()) {
+                return Optional.empty();
+            }
+            uuid = tebexUuid.get();
         }
 
+        Instant createdAt = parseInstant(stringValue(object, "date").orElse(null)).orElse(importedAt);
         BigDecimal amount = new BigDecimal(stringValue(object, "amount").orElse("0")).max(BigDecimal.ZERO);
         String status = stringValue(object, "status").orElse("Unknown");
         boolean invalidStatus = switch (normalizeStatus(status)) {
@@ -186,10 +219,9 @@ public final class TebexClient {
             currency = stringValue(object.getAsJsonObject("currency"), "iso_4217").orElse("");
         }
 
-        Instant createdAt = parseInstant(stringValue(object, "date").orElse(null)).orElse(importedAt);
         return Optional.of(new PaymentRecord(
                 hashId(rawId),
-                uuid.get(),
+                uuid,
                 name,
                 amount,
                 currency,
@@ -200,6 +232,23 @@ public final class TebexClient {
                 packageIds(object),
                 importedAt
         ));
+    }
+
+    private Optional<UUID> resolveMojangUuid(String name, Instant createdAt) {
+        if (name.equals("Unknown") || name.isBlank()) {
+            return Optional.empty();
+        }
+        try {
+            Optional<UUID> resolved = mojangClient.resolveAtTime(name, createdAt);
+            if (resolved.isPresent()) {
+                return resolved;
+            }
+            // Point-in-time failed — try current-time as fallback
+            return mojangClient.resolveCurrent(name);
+        } catch (Exception ex) {
+            logger.fine("Mojang UUID resolution failed for '" + name + "': " + ex.getMessage());
+            return Optional.empty();
+        }
     }
 
     private List<Integer> packageIds(JsonObject object) {

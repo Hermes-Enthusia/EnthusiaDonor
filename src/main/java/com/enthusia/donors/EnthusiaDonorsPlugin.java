@@ -6,6 +6,7 @@ import com.enthusia.donors.command.DonorCommand;
 import com.enthusia.donors.config.ConfigManager;
 import com.enthusia.donors.export.JsonExportService;
 import com.enthusia.donors.export.R2UploadService;
+import com.enthusia.donors.mojang.MojangClient;
 import com.enthusia.donors.placeholder.PlaceholderHook;
 import com.enthusia.donors.service.LeaderboardService;
 import com.enthusia.donors.service.PlayerStatService;
@@ -35,7 +36,7 @@ public final class EnthusiaDonorsPlugin extends JavaPlugin {
                 this,
                 configManager,
                 repository,
-                new TebexClient(getLogger()),
+                new TebexClient(getLogger(), new MojangClient(getLogger())),
                 cache,
                 new JsonExportService(getLogger()),
                 new R2UploadService(getLogger())
