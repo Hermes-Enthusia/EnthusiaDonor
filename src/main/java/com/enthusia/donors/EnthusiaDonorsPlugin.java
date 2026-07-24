@@ -32,14 +32,16 @@ public final class EnthusiaDonorsPlugin extends JavaPlugin {
         playerStatCache = new PlayerStatCache();
 
         DonorRepository repository = new DonorRepository(getDataFolder().toPath(), getLogger());
+        MojangClient mojangClient = new MojangClient(getLogger());
         leaderboardService = new LeaderboardService(
                 this,
                 configManager,
                 repository,
-                new TebexClient(getLogger(), new MojangClient(getLogger())),
+                new TebexClient(getLogger(), mojangClient),
                 cache,
                 new JsonExportService(getLogger()),
-                new R2UploadService(getLogger())
+                new R2UploadService(getLogger()),
+                mojangClient
         );
         leaderboardService.start();
 

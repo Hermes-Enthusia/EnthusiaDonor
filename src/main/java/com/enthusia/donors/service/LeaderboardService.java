@@ -36,6 +36,7 @@ public final class LeaderboardService {
     private final JsonExportService jsonExportService;
     private final R2UploadService r2UploadService;
     private final ExecutorService ioExecutor;
+    private final MojangClient mojangClient;
     private BukkitTask refreshTask;
 
     public LeaderboardService(
@@ -45,7 +46,8 @@ public final class LeaderboardService {
             TebexClient tebexClient,
             DonorCache cache,
             JsonExportService jsonExportService,
-            R2UploadService r2UploadService
+            R2UploadService r2UploadService,
+            MojangClient mojangClient
     ) {
         this.plugin = plugin;
         this.logger = plugin.getLogger();
@@ -55,6 +57,7 @@ public final class LeaderboardService {
         this.cache = cache;
         this.jsonExportService = jsonExportService;
         this.r2UploadService = r2UploadService;
+        this.mojangClient = mojangClient;
         this.ioExecutor = Executors.newSingleThreadExecutor(new NamedThreadFactory("EnthusiaDonors-IO"));
     }
 
@@ -79,7 +82,6 @@ public final class LeaderboardService {
                 .thenRun(() -> {
                     // Run UUID migration AFTER Tebex refresh to correct any UUIDs the
                     // TebexClient couldn't resolve. Then rebuild totals from the fixed data.
-                    MojangClient mojangClient = new MojangClient(logger);
                     try {
                         int migrated = repository.migrateUuids(mojangClient);
                         if (migrated > 0) {

@@ -324,9 +324,7 @@ public final class DonorRepository {
             c.setAutoCommit(false);
 
             try (PreparedStatement updatePayment = c.prepareStatement(
-                    "UPDATE payments SET player_uuid = ? WHERE player_uuid = ?");
-                 PreparedStatement updateTotals = c.prepareStatement(
-                    "UPDATE donor_totals SET player_uuid = ? WHERE player_uuid = ?")) {
+                    "UPDATE payments SET player_uuid = ? WHERE player_uuid = ?")) {
 
                 for (Row row : rows) {
                     // Parse stored UUID — skip if unparseable
@@ -370,21 +368,16 @@ public final class DonorRepository {
 
                     String realUuidStr = realUuid.toString();
 
-                    // Update payments table
+                    // Update payments table only — donor_totals is rebuilt from
+                    // corrected payments by the caller (LeaderboardService).
                     updatePayment.setString(1, realUuidStr);
                     updatePayment.setString(2, row.uuid);
                     updatePayment.addBatch();
-
-                    // Update donor_totals table
-                    updateTotals.setString(1, realUuidStr);
-                    updateTotals.setString(2, row.uuid);
-                    updateTotals.addBatch();
 
                     updated++;
                 }
 
                 updatePayment.executeBatch();
-                updateTotals.executeBatch();
             } catch (Exception e) {
                 c.rollback();
                 throw new SQLException("UUID migration failed", e);
@@ -392,47 +385,7 @@ public final class DonorRepository {
             c.commit();
         }
 
-        // Re-merge donor_totals: if migration caused duplicate UUIDs, merge them
-        if (updated > 0) {
-            mergeDuplicateDonorTotals();
-        }
-
         return updated;
-    }
-
-    private void mergeDuplicateDonorTotals() throws SQLException {
-        try (Connection c = connect()) {
-            c.setAutoCommit(false);
-            try (Statement s = c.createStatement()) {
-                // Group by UUID, sum totals, keep max ranks
-                s.executeUpdate("""
-                        CREATE TEMPORARY TABLE IF NOT EXISTS merged_totals AS
-                        SELECT
-                            player_uuid,
-                            MIN(player_name) AS player_name,
-                            SUM(CAST(alltime_total AS REAL)) AS alltime_total,
-                            SUM(CAST(monthly_total AS REAL)) AS monthly_total,
-                            MIN(alltime_rank) AS alltime_rank,
-                            MIN(monthly_rank) AS monthly_rank,
-                            MAX(updated_at) AS updated_at
-                        FROM donor_totals
-                        GROUP BY player_uuid
-                        HAVING COUNT(*) > 1
-                        """);
-                // Delete duplicates
-                s.executeUpdate("""
-                        DELETE FROM donor_totals
-                        WHERE player_uuid IN (SELECT player_uuid FROM merged_totals)
-                        """);
-                // Insert merged
-                s.executeUpdate("""
-                        INSERT INTO donor_totals
-                        SELECT * FROM merged_totals
-                        """);
-                s.executeUpdate("DROP TABLE IF EXISTS merged_totals");
-            }
-            c.commit();
-        }
     }
 
     private record Row(String uuid, String name, long createdAt) {}
