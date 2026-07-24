@@ -80,9 +80,13 @@ public final class LeaderboardService {
             }
         }, ioExecutor).thenCompose(ignored -> refresh(false))
                 .thenRun(() -> {
-                    // Run UUID migration AFTER Tebex refresh to correct any UUIDs the
-                    // TebexClient couldn't resolve. Then rebuild totals from the fixed data.
+                    // Run UUID migration ONCE to correct historical payment UUIDs.
+                    // After it completes, new payments are resolved by TebexClient.
                     try {
+                        if (repository.isMigrationDone("uuid-migration-v1")) {
+                            logger.info("UUID migration already completed; skipping.");
+                            return;
+                        }
                         int migrated = repository.migrateUuids(mojangClient);
                         if (migrated > 0) {
                             logger.info("UUID migration: fixed " + migrated + " payment(s) with wrong UUIDs.");
@@ -93,6 +97,8 @@ public final class LeaderboardService {
                             jsonExportService.export(snapshot, cache, config);
                             logger.info("UUID migration: rebuilt donor totals after migration.");
                         }
+                        repository.markMigrationDone("uuid-migration-v1");
+                        logger.info("UUID migration marked as completed.");
                     } catch (Exception ex) {
                         logger.warning("UUID migration failed: " + ex.getMessage());
                     }

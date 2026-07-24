@@ -69,6 +69,12 @@ public final class DonorRepository {
                       updated_at INTEGER NOT NULL
                     )
                     """);
+            s.executeUpdate("""
+                    CREATE TABLE IF NOT EXISTS migrations (
+                      name TEXT PRIMARY KEY,
+                      completed_at INTEGER NOT NULL
+                    )
+                    """);
         }
     }
 
@@ -389,6 +395,27 @@ public final class DonorRepository {
     }
 
     private record Row(String uuid, String name, long createdAt) {}
+
+    public boolean isMigrationDone(String name) throws SQLException {
+        try (Connection c = connect();
+             PreparedStatement ps = c.prepareStatement(
+                     "SELECT 1 FROM migrations WHERE name = ?")) {
+            ps.setString(1, name);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next();
+            }
+        }
+    }
+
+    public void markMigrationDone(String name) throws SQLException {
+        try (Connection c = connect();
+             PreparedStatement ps = c.prepareStatement(
+                     "INSERT OR IGNORE INTO migrations (name, completed_at) VALUES (?, ?)")) {
+            ps.setString(1, name);
+            ps.setLong(2, System.currentTimeMillis());
+            ps.executeUpdate();
+        }
+    }
 
     private boolean intersects(Set<Integer> a, Set<Integer> b) {
         for (Integer value : a) {
