@@ -6,7 +6,8 @@ import com.enthusia.donors.command.DonorCommand;
 import com.enthusia.donors.config.ConfigManager;
 import com.enthusia.donors.export.JsonExportService;
 import com.enthusia.donors.export.R2UploadService;
-import com.enthusia.donors.mojang.MojangClient;
+import com.enthusia.donors.identity.IdentityResolver;
+import com.enthusia.donors.identity.PlayerJoinListener;
 import com.enthusia.donors.placeholder.PlaceholderHook;
 import com.enthusia.donors.service.LeaderboardService;
 import com.enthusia.donors.service.PlayerStatService;
@@ -32,18 +33,21 @@ public final class EnthusiaDonorsPlugin extends JavaPlugin {
         playerStatCache = new PlayerStatCache();
 
         DonorRepository repository = new DonorRepository(getDataFolder().toPath(), getLogger());
-        MojangClient mojangClient = new MojangClient(getLogger());
+        IdentityResolver identityResolver = new IdentityResolver(repository, getLogger());
         leaderboardService = new LeaderboardService(
                 this,
                 configManager,
                 repository,
-                new TebexClient(getLogger(), mojangClient),
+                new TebexClient(getLogger(), identityResolver),
                 cache,
                 new JsonExportService(getLogger()),
-                new R2UploadService(getLogger()),
-                mojangClient
+                new R2UploadService(getLogger())
         );
         leaderboardService.start();
+
+        // Register player join listener to track identities
+        getServer().getPluginManager().registerEvents(
+                new PlayerJoinListener(repository, getLogger()), this);
 
         playerStatService = new PlayerStatService(
                 this,
@@ -54,7 +58,7 @@ public final class EnthusiaDonorsPlugin extends JavaPlugin {
 
         PluginCommand command = getCommand("enthusiadonors");
         if (command != null) {
-            DonorCommand executor = new DonorCommand(configManager, cache, leaderboardService, this::reloadPlugin);
+            DonorCommand executor = new DonorCommand(configManager, cache, leaderboardService, repository, this::reloadPlugin);
             command.setExecutor(executor);
             command.setTabCompleter(executor);
         }

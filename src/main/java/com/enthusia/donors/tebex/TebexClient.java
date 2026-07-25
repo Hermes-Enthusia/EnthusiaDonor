@@ -1,8 +1,8 @@
 package com.enthusia.donors.tebex;
 
 import com.enthusia.donors.config.DonorsConfig;
+import com.enthusia.donors.identity.IdentityResolver;
 import com.enthusia.donors.model.PaymentRecord;
-import com.enthusia.donors.mojang.MojangClient;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
@@ -34,17 +34,11 @@ public final class TebexClient {
     private static final URI PAYMENTS_URI = URI.create("https://plugin.tebex.io/payments");
 
     private final Logger logger;
-    private final MojangClient mojangClient;
-    private final boolean useMojangResolution;
+    private final IdentityResolver identityResolver;
 
-    public TebexClient(Logger logger) {
-        this(logger, null);
-    }
-
-    public TebexClient(Logger logger, MojangClient mojangClient) {
+    public TebexClient(Logger logger, IdentityResolver identityResolver) {
         this.logger = logger;
-        this.mojangClient = mojangClient;
-        this.useMojangResolution = mojangClient != null;
+        this.identityResolver = identityResolver;
     }
 
     public CompletableFuture<List<PaymentRecord>> fetchPayments(DonorsConfig config) {
@@ -162,7 +156,7 @@ public final class TebexClient {
             }
         }
         if (skipped > 0) {
-            logger.warning("Skipped " + skipped + " Tebex payments with missing or invalid public player data.");
+            logger.warning("Skipped " + skipped + " Tebex payments with missing or invalid player data.");
         }
         return new PageResult(payments, hasNext);
     }
@@ -177,32 +171,24 @@ public final class TebexClient {
                 ? object.getAsJsonObject("player")
                 : new JsonObject();
         String name = stringValue(player, "name").orElse("Unknown");
-
-        // Parse Tebex UUID — used as fallback or for Floodgate players
         Optional<UUID> tebexUuid = stringValue(player, "uuid").flatMap(this::parseUuid);
-        UUID uuid;
 
-        if (useMojangResolution) {
-            // Floodgate UUIDs (00000000-0000-0000-0009-xxxxxxxxxxxx) are valid
-            // for Bedrock players; don't try to resolve them through Mojang
-            if (tebexUuid.isPresent() && MojangClient.isFloodgateUuid(tebexUuid.get())) {
+        // Resolve UUID via identity system: payment_links → identities → Bukkit OfflinePlayer
+        UUID uuid;
+        if (identityResolver != null) {
+            Optional<UUID> resolved = identityResolver.resolve(name);
+            if (resolved.isPresent()) {
+                uuid = resolved.get();
+            } else if (tebexUuid.isPresent()) {
                 uuid = tebexUuid.get();
+                logger.fine("No identity found for Tebex name '" + name + "'; using Tebex UUID " + uuid);
             } else {
-                Instant createdAt = parseInstant(stringValue(object, "date").orElse(null)).orElse(importedAt);
-                Optional<UUID> mojangUuid = resolveMojangUuid(name, createdAt);
-                if (mojangUuid.isPresent()) {
-                    uuid = mojangUuid.get();
-                } else if (tebexUuid.isPresent()) {
-                    uuid = tebexUuid.get();
-                } else {
-                    return Optional.empty();
-                }
-            }
-        } else {
-            if (tebexUuid.isEmpty()) {
                 return Optional.empty();
             }
+        } else if (tebexUuid.isPresent()) {
             uuid = tebexUuid.get();
+        } else {
+            return Optional.empty();
         }
 
         Instant createdAt = parseInstant(stringValue(object, "date").orElse(null)).orElse(importedAt);
@@ -232,23 +218,6 @@ public final class TebexClient {
                 packageIds(object),
                 importedAt
         ));
-    }
-
-    private Optional<UUID> resolveMojangUuid(String name, Instant createdAt) {
-        if (name.equals("Unknown") || name.isBlank()) {
-            return Optional.empty();
-        }
-        try {
-            Optional<UUID> resolved = mojangClient.resolveAtTime(name, createdAt);
-            if (resolved.isPresent()) {
-                return resolved;
-            }
-            // Point-in-time failed — try current-time as fallback
-            return mojangClient.resolveCurrent(name);
-        } catch (Exception ex) {
-            logger.fine("Mojang UUID resolution failed for '" + name + "': " + ex.getMessage());
-            return Optional.empty();
-        }
     }
 
     private List<Integer> packageIds(JsonObject object) {

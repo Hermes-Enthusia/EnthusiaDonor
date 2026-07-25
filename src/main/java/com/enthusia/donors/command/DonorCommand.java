@@ -5,6 +5,7 @@ import com.enthusia.donors.config.ConfigManager;
 import com.enthusia.donors.config.DonorsConfig;
 import com.enthusia.donors.model.DonorEntry;
 import com.enthusia.donors.service.LeaderboardService;
+import com.enthusia.donors.storage.DonorRepository;
 import org.bukkit.Bukkit;
 import org.bukkit.OfflinePlayer;
 import org.bukkit.command.Command;
@@ -23,12 +24,15 @@ public final class DonorCommand implements CommandExecutor, TabCompleter {
     private final ConfigManager configManager;
     private final DonorCache cache;
     private final LeaderboardService service;
+    private final DonorRepository repository;
     private final Runnable reloadAction;
 
-    public DonorCommand(ConfigManager configManager, DonorCache cache, LeaderboardService service, Runnable reloadAction) {
+    public DonorCommand(ConfigManager configManager, DonorCache cache, LeaderboardService service,
+                        DonorRepository repository, Runnable reloadAction) {
         this.configManager = configManager;
         this.cache = cache;
         this.service = service;
+        this.repository = repository;
         this.reloadAction = reloadAction;
     }
 
@@ -36,6 +40,7 @@ public final class DonorCommand implements CommandExecutor, TabCompleter {
     public boolean onCommand(@NotNull CommandSender sender, @NotNull Command command, @NotNull String label, @NotNull String[] args) {
         if (args.length == 0) {
             sender.sendMessage("§e/enthusiadonors status §7| reload | refresh | top <alltime|monthly> | debug <player>");
+            sender.sendMessage("§e/enthusiadonors link <tebex-name> <player> | unlink <tebex-name> | rebuild");
             return true;
         }
 
@@ -66,9 +71,74 @@ public final class DonorCommand implements CommandExecutor, TabCompleter {
                 }
                 sendDebug(sender, args[1]);
             }
+            case "link" -> {
+                if (!require(sender, "enthusiadonors.admin")) return true;
+                if (args.length < 3) {
+                    sender.sendMessage("§cUsage: /enthusiadonors link <tebex-name> <minecraft-player>");
+                    return true;
+                }
+                handleLink(sender, args[1], args[2]);
+            }
+            case "unlink" -> {
+                if (!require(sender, "enthusiadonors.admin")) return true;
+                if (args.length < 2) {
+                    sender.sendMessage("§cUsage: /enthusiadonors unlink <tebex-name>");
+                    return true;
+                }
+                handleUnlink(sender, args[1]);
+            }
+            case "rebuild" -> {
+                if (!require(sender, "enthusiadonors.admin")) return true;
+                handleRebuild(sender);
+            }
             default -> sender.sendMessage("§cUnknown subcommand.");
         }
         return true;
+    }
+
+    private void handleLink(CommandSender sender, String tebexName, String playerName) {
+        @SuppressWarnings("deprecation")
+        OfflinePlayer player = Bukkit.getOfflinePlayer(playerName);
+        if (!player.hasPlayedBefore()) {
+            sender.sendMessage("§cPlayer '" + playerName + "' has never joined this server.");
+            return;
+        }
+
+        try {
+            repository.upsertPaymentLink(tebexName, player.getUniqueId(), true);
+            int updated = repository.updatePaymentUuidsByName(tebexName, player.getUniqueId());
+            sender.sendMessage("§aLinked Tebex name '" + tebexName + "' → " + playerName + " (" + player.getUniqueId() + ").");
+            if (updated > 0) {
+                sender.sendMessage("§aUpdated " + updated + " existing payment(s). Run §e/enthusiadonors rebuild§a.");
+            }
+        } catch (Exception ex) {
+            sender.sendMessage("§cFailed to link: " + ex.getMessage());
+        }
+    }
+
+    private void handleUnlink(CommandSender sender, String tebexName) {
+        try {
+            boolean removed = repository.removePaymentLink(tebexName);
+            if (removed) {
+                sender.sendMessage("§aRemoved payment link for '" + tebexName + "'.");
+            } else {
+                sender.sendMessage("§eNo payment link found for '" + tebexName + "'.");
+            }
+        } catch (Exception ex) {
+            sender.sendMessage("§cFailed to unlink: " + ex.getMessage());
+        }
+    }
+
+    private void handleRebuild(CommandSender sender) {
+        sender.sendMessage("§7Rebuilding donor totals from payment records...");
+        try {
+            DonorsConfig config = configManager.get();
+            var totals = repository.rebuildTotals(config, java.util.Set.of());
+            cache.replace(totals, java.time.Instant.now(), com.enthusia.donors.model.RefreshState.OK);
+            sender.sendMessage("§aRebuilt totals for " + totals.size() + " donor(s).");
+        } catch (Exception ex) {
+            sender.sendMessage("§cRebuild failed: " + ex.getMessage());
+        }
     }
 
     private void sendStatus(CommandSender sender) {
@@ -131,7 +201,7 @@ public final class DonorCommand implements CommandExecutor, TabCompleter {
     @Override
     public List<String> onTabComplete(@NotNull CommandSender sender, @NotNull Command command, @NotNull String label, @NotNull String[] args) {
         if (args.length == 1) {
-            return filter(List.of("reload", "refresh", "status", "top", "debug"), args[0]);
+            return filter(List.of("reload", "refresh", "status", "top", "debug", "link", "unlink", "rebuild"), args[0]);
         }
         if (args.length == 2 && args[0].equalsIgnoreCase("top")) {
             return filter(List.of("alltime", "monthly"), args[1]);

@@ -2,8 +2,8 @@ package com.enthusia.donors.storage;
 
 import com.enthusia.donors.config.DonorsConfig;
 import com.enthusia.donors.model.DonorEntry;
+import com.enthusia.donors.model.IdentityRecord;
 import com.enthusia.donors.model.PaymentRecord;
-import com.enthusia.donors.mojang.MojangClient;
 
 import java.math.BigDecimal;
 import java.nio.file.Files;
@@ -73,6 +73,24 @@ public final class DonorRepository {
                     CREATE TABLE IF NOT EXISTS migrations (
                       name TEXT PRIMARY KEY,
                       completed_at INTEGER NOT NULL
+                    )
+                    """);
+            s.executeUpdate("""
+                    CREATE TABLE IF NOT EXISTS identities (
+                      username TEXT NOT NULL,
+                      server_uuid TEXT NOT NULL,
+                      is_bedrock INTEGER NOT NULL DEFAULT 0,
+                      floodgate_xuid TEXT,
+                      last_seen_at INTEGER NOT NULL,
+                      PRIMARY KEY (username, server_uuid)
+                    )
+                    """);
+            s.executeUpdate("""
+                    CREATE TABLE IF NOT EXISTS payment_links (
+                      tebex_name TEXT PRIMARY KEY,
+                      server_uuid TEXT NOT NULL,
+                      manual INTEGER NOT NULL DEFAULT 0,
+                      linked_at INTEGER NOT NULL
                     )
                     """);
         }
@@ -301,100 +319,82 @@ public final class DonorRepository {
         }
     }
 
-    /**
-     * Migrate existing payments with wrong UUIDs by resolving the real Mojang
-     * UUID from player_name + created_at timestamp. Only fixes rows where the
-     * Mojang-resolved UUID differs from the stored UUID.
-     *
-     * @return number of payment rows migrated
-     */
-    public int migrateUuids(MojangClient mojangClient) throws SQLException {
-        // Step 1: collect distinct (uuid, name, created_at) rows
-        List<Row> rows = new ArrayList<>();
+    // ── Identity tracking ──
+
+    public void upsertIdentity(String username, UUID serverUuid, boolean isBedrock, String floodgateXuid) throws SQLException {
         try (Connection c = connect();
-             Statement s = c.createStatement();
-             ResultSet rs = s.executeQuery(
-                     "SELECT DISTINCT player_uuid, player_name, created_at FROM payments")) {
-            while (rs.next()) {
-                rows.add(new Row(
-                        rs.getString("player_uuid"),
-                        rs.getString("player_name"),
-                        rs.getLong("created_at")
-                ));
-            }
+             PreparedStatement ps = c.prepareStatement(
+                     "INSERT OR REPLACE INTO identities (username, server_uuid, is_bedrock, floodgate_xuid, last_seen_at) VALUES (?, ?, ?, ?, ?)")) {
+            ps.setString(1, username);
+            ps.setString(2, serverUuid.toString());
+            ps.setInt(3, isBedrock ? 1 : 0);
+            ps.setString(4, floodgateXuid);
+            ps.setLong(5, System.currentTimeMillis());
+            ps.executeUpdate();
         }
-
-        int updated = 0;
-        int skipped = 0;
-        try (Connection c = connect()) {
-            c.setAutoCommit(false);
-
-            try (PreparedStatement updatePayment = c.prepareStatement(
-                    "UPDATE payments SET player_uuid = ? WHERE player_uuid = ?")) {
-
-                for (Row row : rows) {
-                    // Parse stored UUID — skip if unparseable
-                    UUID storedUuid;
-                    try {
-                        storedUuid = UUID.fromString(row.uuid);
-                    } catch (IllegalArgumentException e) {
-                        skipped++;
-                        continue;
-                    }
-
-                    // Floodgate UUIDs are valid — skip
-                    if (MojangClient.isFloodgateUuid(storedUuid)) {
-                        continue;
-                    }
-
-                    // Resolve real UUID from Mojang
-                    java.time.Instant createdAt = java.time.Instant.ofEpochMilli(row.createdAt);
-                    Optional<UUID> resolved;
-                    try {
-                        resolved = mojangClient.resolveAtTime(row.name, createdAt);
-                        if (resolved.isEmpty()) {
-                            // Try current-time fallback
-                            resolved = mojangClient.resolveCurrent(row.name);
-                        }
-                    } catch (Exception e) {
-                        skipped++;
-                        continue;
-                    }
-
-                    if (resolved.isEmpty()) {
-                        skipped++;
-                        continue;
-                    }
-
-                    UUID realUuid = resolved.get();
-                    if (realUuid.equals(storedUuid)) {
-                        // Already correct — skip
-                        continue;
-                    }
-
-                    String realUuidStr = realUuid.toString();
-
-                    // Update payments table only — donor_totals is rebuilt from
-                    // corrected payments by the caller (LeaderboardService).
-                    updatePayment.setString(1, realUuidStr);
-                    updatePayment.setString(2, row.uuid);
-                    updatePayment.addBatch();
-
-                    updated++;
-                }
-
-                updatePayment.executeBatch();
-            } catch (Exception e) {
-                c.rollback();
-                throw new SQLException("UUID migration failed", e);
-            }
-            c.commit();
-        }
-
-        return updated;
     }
 
-    private record Row(String uuid, String name, long createdAt) {}
+    public Optional<UUID> resolveIdentity(String username) throws SQLException {
+        try (Connection c = connect();
+             PreparedStatement ps = c.prepareStatement(
+                     "SELECT server_uuid FROM identities WHERE LOWER(username) = LOWER(?) ORDER BY last_seen_at DESC LIMIT 1")) {
+            ps.setString(1, username);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    return Optional.of(UUID.fromString(rs.getString("server_uuid")));
+                }
+            }
+        }
+        return Optional.empty();
+    }
+
+    // ── Payment links ──
+
+    public void upsertPaymentLink(String tebexName, UUID serverUuid, boolean manual) throws SQLException {
+        try (Connection c = connect();
+             PreparedStatement ps = c.prepareStatement(
+                     "INSERT OR REPLACE INTO payment_links (tebex_name, server_uuid, manual, linked_at) VALUES (?, ?, ?, ?)")) {
+            ps.setString(1, tebexName);
+            ps.setString(2, serverUuid.toString());
+            ps.setInt(3, manual ? 1 : 0);
+            ps.setLong(4, System.currentTimeMillis());
+            ps.executeUpdate();
+        }
+    }
+
+    public Optional<UUID> getLinkedUuid(String tebexName) throws SQLException {
+        try (Connection c = connect();
+             PreparedStatement ps = c.prepareStatement(
+                     "SELECT server_uuid FROM payment_links WHERE LOWER(tebex_name) = LOWER(?)")) {
+            ps.setString(1, tebexName);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    return Optional.of(UUID.fromString(rs.getString("server_uuid")));
+                }
+            }
+        }
+        return Optional.empty();
+    }
+
+    public boolean removePaymentLink(String tebexName) throws SQLException {
+        try (Connection c = connect();
+             PreparedStatement ps = c.prepareStatement(
+                     "DELETE FROM payment_links WHERE LOWER(tebex_name) = LOWER(?)")) {
+            ps.setString(1, tebexName);
+            return ps.executeUpdate() > 0;
+        }
+    }
+
+    /** Update all payments with a given player_name to a new UUID. */
+    public int updatePaymentUuidsByName(String playerName, UUID newUuid) throws SQLException {
+        try (Connection c = connect();
+             PreparedStatement ps = c.prepareStatement(
+                     "UPDATE payments SET player_uuid = ? WHERE LOWER(player_name) = LOWER(?)")) {
+            ps.setString(1, newUuid.toString());
+            ps.setString(2, playerName);
+            return ps.executeUpdate();
+        }
+    }
 
     public boolean isMigrationDone(String name) throws SQLException {
         try (Connection c = connect();

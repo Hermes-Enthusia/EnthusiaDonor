@@ -8,7 +8,6 @@ import com.enthusia.donors.export.R2UploadService;
 import com.enthusia.donors.model.DonorEntry;
 import com.enthusia.donors.model.PaymentRecord;
 import com.enthusia.donors.model.RefreshState;
-import com.enthusia.donors.mojang.MojangClient;
 import com.enthusia.donors.storage.DonorRepository;
 import com.enthusia.donors.tebex.FakeDonorData;
 import com.enthusia.donors.tebex.TebexClient;
@@ -36,7 +35,6 @@ public final class LeaderboardService {
     private final JsonExportService jsonExportService;
     private final R2UploadService r2UploadService;
     private final ExecutorService ioExecutor;
-    private final MojangClient mojangClient;
     private BukkitTask refreshTask;
 
     public LeaderboardService(
@@ -46,8 +44,7 @@ public final class LeaderboardService {
             TebexClient tebexClient,
             DonorCache cache,
             JsonExportService jsonExportService,
-            R2UploadService r2UploadService,
-            MojangClient mojangClient
+            R2UploadService r2UploadService
     ) {
         this.plugin = plugin;
         this.logger = plugin.getLogger();
@@ -57,7 +54,6 @@ public final class LeaderboardService {
         this.cache = cache;
         this.jsonExportService = jsonExportService;
         this.r2UploadService = r2UploadService;
-        this.mojangClient = mojangClient;
         this.ioExecutor = Executors.newSingleThreadExecutor(new NamedThreadFactory("EnthusiaDonors-IO"));
     }
 
@@ -78,31 +74,7 @@ public final class LeaderboardService {
                 cache.markFailure("Local cache load failed");
                 logger.warning("Could not load local donor cache: " + ex.getMessage());
             }
-        }, ioExecutor).thenCompose(ignored -> refresh(false))
-                .thenRun(() -> {
-                    // Run UUID migration ONCE to correct historical payment UUIDs.
-                    // After it completes, new payments are resolved by TebexClient.
-                    try {
-                        if (repository.isMigrationDone("uuid-migration-v1")) {
-                            logger.info("UUID migration already completed; skipping.");
-                            return;
-                        }
-                        int migrated = repository.migrateUuids(mojangClient);
-                        if (migrated > 0) {
-                            logger.info("UUID migration: fixed " + migrated + " payment(s) with wrong UUIDs.");
-                            DonorsConfig config = configManager.get();
-                            List<DonorEntry> totals = repository.rebuildTotals(config, Set.of());
-                            cache.replace(totals, Instant.now(), RefreshState.OK);
-                            DonorCache.Snapshot snapshot = cache.snapshot();
-                            jsonExportService.export(snapshot, cache, config);
-                            logger.info("UUID migration: rebuilt donor totals after migration.");
-                        }
-                        repository.markMigrationDone("uuid-migration-v1");
-                        logger.info("UUID migration marked as completed.");
-                    } catch (Exception ex) {
-                        logger.warning("UUID migration failed: " + ex.getMessage());
-                    }
-                });
+        }, ioExecutor).thenCompose(ignored -> refresh(false));
         schedule();
     }
 
