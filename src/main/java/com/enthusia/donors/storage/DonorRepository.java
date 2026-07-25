@@ -305,7 +305,12 @@ public final class DonorRepository {
     }
 
     private Connection connect() throws SQLException {
-        return DriverManager.getConnection("jdbc:sqlite:" + databasePath);
+        Connection c = DriverManager.getConnection("jdbc:sqlite:" + databasePath);
+        try (var stmt = c.createStatement()) {
+            stmt.execute("PRAGMA journal_mode=WAL");
+            stmt.execute("PRAGMA busy_timeout=5000");
+        }
+        return c;
     }
 
     private void addColumnIfMissing(Connection c, String table, String column, String definition) throws SQLException {

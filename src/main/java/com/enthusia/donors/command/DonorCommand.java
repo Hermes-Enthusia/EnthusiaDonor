@@ -100,23 +100,26 @@ public final class DonorCommand implements CommandExecutor, TabCompleter {
     }
 
     private void handleLink(CommandSender sender, String tebexName, String playerName) {
-        @SuppressWarnings("deprecation")
-        OfflinePlayer player = Bukkit.getOfflinePlayer(playerName);
-        if (!player.hasPlayedBefore()) {
-            sender.sendMessage("§cPlayer '" + playerName + "' has never joined this server.");
-            return;
-        }
-
-        try {
-            repository.upsertPaymentLink(tebexName, player.getUniqueId(), true);
-            int updated = repository.updatePaymentUuidsByName(tebexName, player.getUniqueId());
-            sender.sendMessage("§aLinked Tebex name '" + tebexName + "' → " + playerName + " (" + player.getUniqueId() + ").");
-            if (updated > 0) {
-                sender.sendMessage("§aUpdated " + updated + " existing payment(s). Run §e/enthusiadonors rebuild§a.");
-            }
-        } catch (Exception ex) {
-            sender.sendMessage("§cFailed to link: " + ex.getMessage());
-        }
+        plugin.getServer().getScheduler().runTaskAsynchronously(plugin, () -> {
+            @SuppressWarnings("deprecation")
+            OfflinePlayer player = Bukkit.getOfflinePlayer(playerName);
+            plugin.getServer().getScheduler().runTask(plugin, () -> {
+                if (!player.hasPlayedBefore()) {
+                    sender.sendMessage("§cPlayer '" + playerName + "' has never joined this server.");
+                    return;
+                }
+                try {
+                    repository.upsertPaymentLink(tebexName, player.getUniqueId(), true);
+                    int updated = repository.updatePaymentUuidsByName(tebexName, player.getUniqueId());
+                    sender.sendMessage("§aLinked Tebex name '" + tebexName + "' → " + playerName + " (" + player.getUniqueId() + ").");
+                    if (updated > 0) {
+                        sender.sendMessage("§aUpdated " + updated + " existing payment(s). Run §e/enthusiadonors rebuild§a.");
+                    }
+                } catch (Exception ex) {
+                    sender.sendMessage("§cFailed to link: " + ex.getMessage());
+                }
+            });
+        });
     }
 
     private void handleUnlink(CommandSender sender, String tebexName) {
@@ -179,19 +182,23 @@ public final class DonorCommand implements CommandExecutor, TabCompleter {
     }
 
     private void sendDebug(CommandSender sender, String name) {
-        DonorsConfig config = configManager.get();
-        @SuppressWarnings("deprecation")
-        OfflinePlayer player = Bukkit.getOfflinePlayer(name);
-        Optional<DonorEntry> donor = cache.snapshot().byUuid(player.getUniqueId()).or(() -> cache.snapshot().byName(name));
-        if (donor.isEmpty()) {
-            sender.sendMessage("§eNo cached donor totals for " + name + ".");
-            return;
-        }
-        DonorEntry d = donor.get();
-        sender.sendMessage("§6Donor cache for " + d.name());
-        sender.sendMessage("§7UUID: §f" + d.uuid());
-        sender.sendMessage("§7All-time: §a" + cache.formatAmount(d.alltimeTotal(), config) + " §7rank §f#" + d.alltimeRank());
-        sender.sendMessage("§7Monthly: §a" + cache.formatAmount(d.monthlyTotal(), config) + " §7rank §f" + (d.monthlyRank() > 0 ? "#" + d.monthlyRank() : config.emptyRank()));
+        plugin.getServer().getScheduler().runTaskAsynchronously(plugin, () -> {
+            @SuppressWarnings("deprecation")
+            OfflinePlayer player = Bukkit.getOfflinePlayer(name);
+            DonorsConfig config = configManager.get();
+            Optional<DonorEntry> donor = cache.snapshot().byUuid(player.getUniqueId()).or(() -> cache.snapshot().byName(name));
+            plugin.getServer().getScheduler().runTask(plugin, () -> {
+                if (donor.isEmpty()) {
+                    sender.sendMessage("§eNo cached donor totals for " + name + ".");
+                    return;
+                }
+                DonorEntry d = donor.get();
+                sender.sendMessage("§6Donor cache for " + d.name());
+                sender.sendMessage("§7UUID: §f" + d.uuid());
+                sender.sendMessage("§7All-time: §a" + cache.formatAmount(d.alltimeTotal(), config) + " §7rank §f#" + d.alltimeRank());
+                sender.sendMessage("§7Monthly: §a" + cache.formatAmount(d.monthlyTotal(), config) + " §7rank §f" + (d.monthlyRank() > 0 ? "#" + d.monthlyRank() : config.emptyRank()));
+            });
+        });
     }
 
     private boolean require(CommandSender sender, String permission) {

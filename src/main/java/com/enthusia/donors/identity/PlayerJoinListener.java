@@ -33,8 +33,8 @@ public final class PlayerJoinListener implements Listener {
     }
 
     static boolean isFloodgateUuid(UUID uuid) {
-        long msb = uuid.getMostSignificantBits();
-        return (msb & 0xFFFFFFFF00000000L) == 0x0000000000000000L
-                && ((msb >> 32) & 0xFFFFFFFFL) == 0x00000009L;
+        // Floodgate UUIDs have variant bits 0x0009 at bits 48-63 of the least
+        // significant half (clock_seq_and_variant field): 00000000-0000-0000-0009-xxxxxxxxxxxx
+        return (uuid.getLeastSignificantBits() >> 48) == 0x0009L;
     }
 }

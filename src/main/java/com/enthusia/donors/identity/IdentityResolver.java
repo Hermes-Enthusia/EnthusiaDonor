@@ -46,7 +46,12 @@ public final class IdentityResolver {
         try {
             Optional<UUID> identity = repository.resolveIdentity(name);
             if (identity.isPresent()) {
-                // Auto-link for future lookups
+                // Auto-link for future lookups so subsequent resolutions skip
+                // straight to payment_links (tier 1). This is an automatic trust
+                // decision: the first player to join under this Tebex name "owns"
+                // all payments under that name. On an online-mode (Mojang-auth)
+                // server this is safe since usernames are unique. On offline-mode
+                // servers, use /enthusiadonors link for explicit confirmation.
                 try {
                     repository.upsertPaymentLink(name, identity.get(), false);
                 } catch (Exception ignored) {
