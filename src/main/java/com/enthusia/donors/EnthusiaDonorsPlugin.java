@@ -58,7 +58,7 @@ public final class EnthusiaDonorsPlugin extends JavaPlugin {
 
         PluginCommand command = getCommand("enthusiadonors");
         if (command != null) {
-            DonorCommand executor = new DonorCommand(configManager, cache, leaderboardService, repository, this::reloadPlugin);
+            DonorCommand executor = new DonorCommand(configManager, cache, leaderboardService, repository, this, this::reloadPlugin);
             command.setExecutor(executor);
             command.setTabCompleter(executor);
         }

@@ -1,7 +1,6 @@
 package com.enthusia.donors.identity;
 
 import com.enthusia.donors.storage.DonorRepository;
-import org.bukkit.Bukkit;
 
 import java.util.Optional;
 import java.util.UUID;
@@ -59,17 +58,7 @@ public final class IdentityResolver {
             logger.warning("Failed to resolve identity for '" + name + "': " + ex.getMessage());
         }
 
-        // 3. Bukkit OfflinePlayer (last resort — may return wrong UUID for cracked names)
-        try {
-            @SuppressWarnings("deprecation")
-            var offline = Bukkit.getOfflinePlayer(name);
-            if (offline.hasPlayedBefore()) {
-                return Optional.of(offline.getUniqueId());
-            }
-        } catch (Exception ex) {
-            logger.warning("Failed to lookup OfflinePlayer for '" + name + "': " + ex.getMessage());
-        }
-
+        // 3. Unresolved — caller falls back to Tebex UUID
         return Optional.empty();
     }
 }

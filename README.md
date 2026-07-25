@@ -34,7 +34,7 @@ Use `excluded-transaction-ids` for private manual exclusions such as test transa
 mvn clean package
 ```
 
-The plugin jar is produced at `target/EnthusiaDonors-1.0.0.jar`.
+The plugin jar is produced at `target/EnthusiaDonors-2.0.0.jar`.
 
 ## Privacy
 
@@ -103,6 +103,9 @@ Configure `tebex.api-key` with your Tebex server secret. The plugin uses `GET ht
 - `/enthusiadonors top alltime`
 - `/enthusiadonors top monthly`
 - `/enthusiadonors debug <player>`
+- `/enthusiadonors link <tebex-name> <player>` — link a Tebex name to a server UUID
+- `/enthusiadonors unlink <tebex-name>` — remove a manual link
+- `/enthusiadonors rebuild` — rebuild donor totals from payments
 
 ## Kill And Death Placeholders
 

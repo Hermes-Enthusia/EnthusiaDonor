@@ -12,6 +12,7 @@ import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
 import org.bukkit.command.CommandSender;
 import org.bukkit.command.TabCompleter;
+import org.bukkit.plugin.Plugin;
 import org.jetbrains.annotations.NotNull;
 
 import java.time.ZoneOffset;
@@ -25,14 +26,16 @@ public final class DonorCommand implements CommandExecutor, TabCompleter {
     private final DonorCache cache;
     private final LeaderboardService service;
     private final DonorRepository repository;
+    private final Plugin plugin;
     private final Runnable reloadAction;
 
     public DonorCommand(ConfigManager configManager, DonorCache cache, LeaderboardService service,
-                        DonorRepository repository, Runnable reloadAction) {
+                        DonorRepository repository, Plugin plugin, Runnable reloadAction) {
         this.configManager = configManager;
         this.cache = cache;
         this.service = service;
         this.repository = repository;
+        this.plugin = plugin;
         this.reloadAction = reloadAction;
     }
 
@@ -131,14 +134,19 @@ public final class DonorCommand implements CommandExecutor, TabCompleter {
 
     private void handleRebuild(CommandSender sender) {
         sender.sendMessage("§7Rebuilding donor totals from payment records...");
-        try {
-            DonorsConfig config = configManager.get();
-            var totals = repository.rebuildTotals(config, java.util.Set.of());
-            cache.replace(totals, java.time.Instant.now(), com.enthusia.donors.model.RefreshState.OK);
-            sender.sendMessage("§aRebuilt totals for " + totals.size() + " donor(s).");
-        } catch (Exception ex) {
-            sender.sendMessage("§cRebuild failed: " + ex.getMessage());
-        }
+        plugin.getServer().getScheduler().runTaskAsynchronously(plugin, () -> {
+            try {
+                DonorsConfig config = configManager.get();
+                var totals = repository.rebuildTotals(config, java.util.Set.of());
+                plugin.getServer().getScheduler().runTask(plugin, () -> {
+                    cache.replace(totals, java.time.Instant.now(), com.enthusia.donors.model.RefreshState.OK);
+                    sender.sendMessage("§aRebuilt totals for " + totals.size() + " donor(s).");
+                });
+            } catch (Exception ex) {
+                plugin.getServer().getScheduler().runTask(plugin, () ->
+                        sender.sendMessage("§cRebuild failed: " + ex.getMessage()));
+            }
+        });
     }
 
     private void sendStatus(CommandSender sender) {
