@@ -14,13 +14,7 @@ counting:
   count-chargeback-payments: false
   included-package-ids: []
   excluded-package-ids: []
-  excluded-transaction-ids:
-    - "tbx-496726a83565-ca380a"
-    - "tbx-460726a83263-a5561d"
-    - "tbx-964726a82701-afe298"
-    - "tbx-555726a82154-46565a"
-    - "tbx-976726a81727-5f4c9e"
-    - "tbx-374726a80234-30c216"
+  excluded-transaction-ids: []
 
 leaderboards:
   timezone: "America/Chicago"
